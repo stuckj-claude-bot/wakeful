@@ -1,0 +1,290 @@
+name: Build and Release Packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (without v prefix, e.g. 1.0.0)'
+        required: true
+
+# No workflow-level concurrency: a release must never be cancelled part-way.
+# It publishes a tag, a GitHub release, the APT/YUM repositories and a Nix
+# version bump, and stopping between those leaves them inconsistent.
+permissions:
+  contents: write
+  pages: write
+
+# Commit subjects marked as bookkeeping: automated commits that do not change
+# what is built. prepare skips them when choosing what to tag, and sync-nix
+# treats them as safe to commit the version bump on top of. Both must use the
+# same pattern or they disagree about which commit is being released.
+env:
+  BOOKKEEPING_COMMIT_RE: '\[(skip ci|ci skip|no ci|skip actions|actions skip)\]'
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      commit: ${{ steps.resolve.outputs.commit }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 50
+
+      - name: Resolve commit
+        id: resolve
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          REF_TYPE: ${{ github.ref_type }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # The commit to tag is resolved from origin/<branch>, and sync-nix
+          # pushes the version bump back to that branch.
+          if [[ "${REF_TYPE}" != "branch" ]]; then
+            echo "::error::Releases must be dispatched from a branch, not a ${REF_TYPE}."
+            exit 1
+          fi
+
+          if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$ ]]; then
+            echo "::error::Invalid version '${VERSION}'. Expected format like '1.0' or '1.2.3' without 'v' prefix."
+            exit 1
+          fi
+
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+          # Ask the remote: the checkout is shallow and can miss tags.
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag ${TAG} already exists on origin"
+            exit 1
+          fi
+
+          COMMIT=$(git log "origin/${BRANCH}" --oneline -50 | grep -v -iE "${BOOKKEEPING_COMMIT_RE}" | head -1 | awk '{print $1}')
+          if [[ -z "${COMMIT}" ]]; then
+            echo "::error::Could not find a non-bookkeeping commit in recent history"
+            exit 1
+          fi
+          FULL_SHA=$(git rev-parse "${COMMIT}")
+          echo "commit=${FULL_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Will release ${TAG} from:"
+          git log -1 --oneline "${FULL_SHA}"
+
+      # The tag is created by the release job, only once every build has passed.
+
+  build:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'  # keep in sync with the pinned nfpm version below
+
+      # Pinned: nfpm@latest can raise its Go requirement past the version
+      # above. v2.47.0 requires Go >= 1.26.4. Bump the two together.
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+
+      # nfpm reads the armored private key from disk. RUNNER_TEMP is outside
+      # the workspace, so the key cannot be swept into a package.
+      - name: Stage the rpm signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::GPG_PRIVATE_KEY is empty; the rpm would be built unsigned"
+            exit 1
+          fi
+          key="${RUNNER_TEMP}/rpm-signing-key.asc"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$key"
+          echo "RPM_SIGNING_KEY_FILE=$key" >> "$GITHUB_ENV"
+
+      - name: Build deb and rpm
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          NFPM_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: scripts/build-packages.sh "$VERSION"
+
+      - name: Verify the rpm is signed
+        run: python3 scripts/check-rpm-signature.py dist/*.rpm
+
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/rpm-signing-key.asc"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: dist/
+
+  # The same install test CI runs, against exactly what is about to ship.
+  package-test:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - debian:trixie
+          - ubuntu:26.04
+          - registry.fedoraproject.org/fedora:43
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: dist/
+      - name: Install, test and remove
+        run: scripts/test-installed-package.sh
+
+  sync-nix:
+    needs: [prepare, build, package-test]
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.sync.outputs.commit }}
+    steps:
+      - name: Checkout the released ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT || github.token }}
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Sync the version onto the released commit
+        id: sync
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          COMMIT: ${{ needs.prepare.outputs.commit }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          target="${COMMIT}"
+          reason=""
+          extra=""
+
+          # The bump is committed on top of the branch head and the tag goes
+          # there, so the head must be something we are willing to release:
+          # prepare's commit plus bookkeeping only.
+          if ! git merge-base --is-ancestor "${COMMIT}" HEAD; then
+            reason="${COMMIT} is not an ancestor of ${BRANCH} — the branch was rewritten mid-release"
+          else
+            extra=$(git log --format=%s "${COMMIT}..HEAD" | grep -v -iE "${BOOKKEEPING_COMMIT_RE}" || true)
+            if [[ -n "${extra}" ]]; then
+              reason="${BRANCH} moved past ${COMMIT} during the release, with commits that are not bookkeeping"
+            fi
+          fi
+
+          if [[ -n "${reason}" ]]; then
+            echo "::warning::Version bump skipped — the Nix package for ${TAG} will report the version already in flake.nix, not ${VERSION}. Reason: ${reason}"
+            {
+              echo "### ⚠️ Version bump skipped"
+              echo
+              echo "Reason: ${reason}"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "commit=${target}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i "s/version = \".*\";/version = \"${VERSION}\";/" flake.nix default.nix
+          sed -i "s/^__version__ = .*/__version__ = \"${VERSION}\"/" src/wakeful/__init__.py
+          nix build -L
+          ./result/bin/wakeful --version | grep -qF "${VERSION}"
+
+          git add flake.nix default.nix src/wakeful/__init__.py
+          if git diff --staged --quiet; then
+            echo "Version already current for ${TAG}"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git commit -m "Set version to ${VERSION} for ${TAG} [skip ci]"
+            # No rebase-and-retry: that would move the bump onto commits that
+            # were never built, and the tag points at what this produces.
+            if ! git push origin "HEAD:${BRANCH}"; then
+              echo "::error::${BRANCH} moved during the release; re-run once it has settled"
+              exit 1
+            fi
+          fi
+          target="$(git rev-parse HEAD)"
+          echo "Version set to \`${VERSION}\`, tagging \`${target}\`." >> "$GITHUB_STEP_SUMMARY"
+          echo "commit=${target}" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: [prepare, build, package-test, sync-nix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: packages/
+
+      - name: List packages
+        run: ls -la packages/
+
+      # Creates the tag as well, at the commit sync-nix produced.
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.sync-nix.outputs.commit }}
+          files: |
+            packages/*.deb
+            packages/*.rpm
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-repo:
+    # Gated on release: the repositories are derived from the release assets.
+    needs: [prepare, build, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # Shared with rebuild-package-repos.yml: two runs replacing the same
+    # apt-history assets at once can leave a signature from one beside an
+    # index from the other. Queued, never cancelled.
+    concurrency:
+      group: package-repositories
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev createrepo-c gnupg
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | awk '/^sec/{split($2,a,"/"); print a[2]; exit}')" >> "$GITHUB_ENV"
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "use-agent" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          gpgconf --kill gpg-agent
+
+      - name: Rebuild package repositories
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          DRY_RUN: '0'
+          EXPECT_TAG: ${{ needs.prepare.outputs.tag }}
+        run: bash scripts/rebuild-package-repos.sh "${RUNNER_TEMP}/repobuild"

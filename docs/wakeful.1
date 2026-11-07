@@ -1,0 +1,99 @@
+.TH WAKEFUL 1 "2026" "wakeful" "User Commands"
+.SH NAME
+wakeful \- keep a KDE Plasma session awake for a set time
+.SH SYNOPSIS
+.B wakeful
+[\fB\-\-no\-tray\fR] [\fB\-v\fR]
+.br
+.B wakeful start
+[\fB\-\-screen\fR] [\fIDURATION\fR]
+.br
+.B wakeful extend
+\fIDURATION\fR
+.br
+.B wakeful stop
+.br
+.B wakeful status
+.SH DESCRIPTION
+With no command,
+.B wakeful
+puts an icon in the system tray. From its menu a block can be started for a
+preset length, a custom length, or until it is turned off, then extended or
+turned off. Left\-clicking the icon starts a block of the last length used, or
+turns a running one off. The tooltip shows the time remaining.
+.PP
+A block is released when its time runs out, when it is turned off, and when
+.B wakeful
+exits or crashes: the inhibitions are held on its own D\-Bus connection, and
+the session's power management drops them when that connection closes.
+.PP
+With a command,
+.B wakeful
+asks the running tray to act, which makes it usable from scripts and from a
+custom keyboard shortcut.
+.SH MODES
+.TP
+.B Keep awake, screen can turn off
+The default. Idle sleep is blocked; the screen still dims, turns off and locks
+on its usual timers. Uses org.freedesktop.PowerManagement.Inhibit.
+.TP
+.B Keep awake and screen on
+Also blocks dimming, turning the screen off and idle screen locking. Adds
+org.freedesktop.ScreenSaver.Inhibit.
+.SH COMMANDS
+.TP
+\fBstart\fR [\fB\-\-screen\fR] [\fIDURATION\fR]
+Start a block, replacing any running one. Without a duration it lasts until
+stopped. \fB\-\-screen\fR keeps the screen on too.
+.TP
+\fBextend\fR \fIDURATION\fR
+Add time to the running block.
+.TP
+.B stop
+End the running block.
+.TP
+.B status
+Print what is being kept awake and for how long.
+.PP
+\fIDURATION\fR is minutes as a bare number (\fB90\fR), or hours, minutes and
+seconds such as \fB1h30m\fR, \fB45m\fR or \fB20s\fR. \fBforever\fR means no end.
+.SH OPTIONS
+.TP
+.B \-\-no\-tray
+Run without a tray icon, controlled only through the commands above.
+.TP
+.BR \-v ", " \-\-verbose
+Log debug detail to standard error.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH CLOSING THE LID
+Closing the lid is an explicit request to sleep, and no inhibition stops it.
+The tray's \fBAlso ignore closing the lid\fR option instead sets the lid action
+in \fI~/.config/powerdevilrc\fR to "Do nothing" for every power profile while a
+block runs, and puts the previous values back when it ends. The previous values
+are written to \fI$XDG_STATE_HOME/wakeful/lid\-restore.json\fR before anything
+is changed. If
+.B wakeful
+is killed, a watchdog process restores them; if the watchdog is also gone (for
+example after a reboot), the next start of
+.B wakeful
+restores them. A value changed in System Settings during the block is left as
+it is.
+.SH FILES
+.TP
+.I ~/.config/wakeful/wakeful.conf
+Preferences: mode, last length, lid option, notifications.
+.TP
+.I ~/.config/autostart/wakeful.desktop
+Present when "Start at login" is on.
+.TP
+.I $XDG_STATE_HOME/wakeful/lid\-restore.json
+The lid values to restore; present only while the lid is being ignored.
+.SH EXIT STATUS
+0 on success. 1 when the tray is not running or refused the command. 2 for a
+duration that cannot be parsed.
+.SH SEE ALSO
+.BR systemd\-inhibit (1)
+.PP
+https://github.com/stuckj/wakeful

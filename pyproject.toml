@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wakeful"
+dynamic = ["version"]
+description = "KDE Plasma tray app that keeps the computer awake for a set time"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Jonathan Stucklen" }]
+# PyQt6 is deliberately not listed: every target installs it from the
+# distribution (python3-pyqt6, python3Packages.pyqt6), and listing it would make
+# pip-based builds pull a second, bundled Qt.
+dependencies = []
+
+[project.urls]
+Homepage = "https://stuckj.github.io/wakeful/"
+Source = "https://github.com/stuckj/wakeful"
+Issues = "https://github.com/stuckj/wakeful/issues"
+
+[project.scripts]
+wakeful = "wakeful.app:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "wakeful.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+wakeful = ["icons/*.svg"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+# Copied unchanged from mkvdup, so that fixes there can be copied over as-is.
+extend-exclude = ["scripts/yum_xmlbase.py", "scripts/check-rpm-signature.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# The D-Bus tests are deselected unless asked for with -m dbus, which must run
+# under dbus-run-session. CI runs both sets and fails on any skip.
+addopts = "-m 'not dbus'"
+markers = [
+    "dbus: needs a private session bus (run under dbus-run-session)",
+]

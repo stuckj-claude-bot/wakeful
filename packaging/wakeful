@@ -1,0 +1,17 @@
+#!/usr/bin/python3 -sP
+# Launcher for the deb and rpm packages, which install the module outside
+# site-packages so one package serves every Python version a distribution has.
+#
+# Bytecode is not written: the package does not own __pycache__ directories,
+# so a run as root would leave files behind that removing the package cannot.
+# The environment variable carries this to the lid watchdog process.
+import os
+import sys
+
+sys.dont_write_bytecode = True
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+sys.path.insert(0, "/usr/lib/wakeful")
+
+from wakeful.app import main  # noqa: E402
+
+sys.exit(main())

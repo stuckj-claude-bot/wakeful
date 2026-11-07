@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Wakeful
+GenericName=Keep Awake
+Comment=Keep the computer awake for a while, then let it sleep
+Exec=wakeful
+Icon=wakeful
+Terminal=false
+Categories=Utility;
+Keywords=awake;sleep;suspend;inhibit;caffeine;insomnia;screen;lid;
+StartupNotify=false

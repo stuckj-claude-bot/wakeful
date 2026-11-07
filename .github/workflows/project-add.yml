@@ -1,0 +1,39 @@
+name: Add to Project
+
+permissions:
+  contents: read
+
+on:
+  issues:
+    types: [opened]
+  # Use pull_request_target so secrets are available for dependabot PRs.
+  # This is safe because this workflow only adds PRs to a project board
+  # and does not check out or execute any code from the PR.
+  pull_request_target:
+    types: [opened]
+
+jobs:
+  add-to-project:
+    name: Add to Open Source Maintenance
+    runs-on: ubuntu-latest
+    steps:
+      # Without the token the add cannot succeed; say so instead of failing
+      # every issue and pull request.
+      - name: Check for the project token
+        id: token
+        env:
+          PROJECT_PAT: ${{ secrets.PROJECT_PAT }}
+        run: |
+          if [ -z "$PROJECT_PAT" ]; then
+            echo "::warning::PROJECT_PAT is not set; not adding to the project board."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Add to project
+        if: steps.token.outputs.present == 'true'
+        uses: actions/add-to-project@v2.0.0
+        with:
+          project-url: https://github.com/users/stuckj/projects/2
+          github-token: ${{ secrets.PROJECT_PAT }}

@@ -1,0 +1,17 @@
+# Dependabot version updates. Only the workflows have versioned dependencies:
+# PyQt6 and the rest come from the distributions and from nixpkgs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels: [dependencies, github_actions]
+    commit-message:
+      prefix: "ci"
+    groups:
+      # init and analyze must run the same version, or the job fails.
+      codeql:
+        patterns: ["github/codeql-action*"]
+      actions:
+        update-types: [minor, patch]
