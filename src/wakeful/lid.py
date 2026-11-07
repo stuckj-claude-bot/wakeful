@@ -104,7 +104,9 @@ class LidGuard:
         if self.engaged:
             # Already "Do nothing" from this or an unrestored earlier run; the
             # journal holds the true originals and must not be overwritten
-            # with the 0s written by that run.
+            # with the 0s written by that run. An unreadable one raises here,
+            # before anything changes, since nothing could restore after.
+            self._read_journal()
             log.info("lid journal already present; keeping its originals")
         else:
             originals = {p: self._store.read(p) for p in PROFILES}
@@ -130,7 +132,13 @@ class LidGuard:
                 log.info("%s lid action is now %r, not ours; leaving it", profile, current)
                 continue
             self._store.write(profile, original)
-        self._reload_quietly()
+        # PowerDevil keeps "Do nothing" loaded until it reloads, so the journal
+        # stays until it has; a repeat finds the values restored and only
+        # reloads.
+        try:
+            self._reload()
+        except Exception as e:
+            raise LidError(f"PowerDevil did not reload its configuration: {e}") from e
         self.journal.unlink(missing_ok=True)
 
     def _write_journal(self, originals: dict[str, str | None]) -> None:
@@ -156,7 +164,7 @@ class LidGuard:
             # Unreadable means the originals are unknown. Leave the file for a
             # person to look at rather than guess, and do not touch the config.
             raise LidError(f"cannot read {self.journal}: {e}") from e
-        originals = data.get("originals")
+        originals = data.get("originals") if isinstance(data, dict) else None
         if not isinstance(originals, dict):
             raise LidError(f"{self.journal} has no originals")
         return originals

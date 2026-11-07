@@ -415,8 +415,8 @@ def test_lid_restored_at_startup_from_a_leftover_journal(stub, env):
 
     a = App(env, "--no-tray")
     try:
-        wait_for(lambda: stub.owner(APP_BUS_NAME), what="wakeful to start")
+        # The restore runs once the bus name is claimed; the journal goes last.
+        wait_for(lambda: not journal.exists(), what="the leftover journal to be restored")
         assert [lid_value(env, p) for p in ("AC", "Battery", "LowBattery")] == ["1", "unset", "2"]
-        assert not journal.exists()
     finally:
         a.stop()

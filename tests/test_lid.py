@@ -131,14 +131,33 @@ def test_corrupt_journal_is_left_alone(journal):
     assert all(store.values[p] == DO_NOTHING for p in PROFILES)
 
 
-def test_reload_failure_does_not_block_restore(journal):
+def test_reload_failure_keeps_the_journal_until_a_reload_works(journal):
     store = FakeStore(ORIGINAL)
+    reload_works = {"now": False}
 
-    def broken_reload():
-        raise RuntimeError("PowerDevil not running")
+    def reload():
+        if not reload_works["now"]:
+            raise RuntimeError("PowerDevil not answering")
 
-    guard = LidGuard(store, broken_reload, journal)
-    guard.engage()
+    guard = LidGuard(store, reload, journal)
+    guard.engage()  # a failed reload while engaging is only logged
+    with pytest.raises(LidError):
+        guard.restore()
+    assert store.values == ORIGINAL
+    assert journal.exists()
+
+    reload_works["now"] = True
     guard.restore()
     assert store.values == ORIGINAL
     assert not journal.exists()
+
+
+@pytest.mark.parametrize("content", ["", "{trunc", "[]", '{"originals": 3}'])
+def test_unreadable_journal_stops_engage_before_any_change(journal, content):
+    store = FakeStore(ORIGINAL)
+    journal.parent.mkdir(parents=True)
+    journal.write_text(content)
+    guard, _ = make(store, journal)
+    with pytest.raises(LidError):
+        guard.engage()
+    assert store.values == ORIGINAL
