@@ -38,7 +38,20 @@ chmod +x "$WORK/stub/gh"
 
 pids=()
 trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT
-python3 -m http.server -d "$REL" "$REL_PORT" >/dev/null 2>&1 & pids+=($!)
+# Starts a server for a directory and returns once it answers, so nothing
+# reaches for it before it is listening.
+serve() {  # serve <dir> <port>
+  python3 -m http.server -d "$1" "$2" >/dev/null 2>&1 & pids+=($!)
+  local _
+  for _ in $(seq 100); do
+    curl -fs -o /dev/null "http://localhost:$2/" && return 0
+    kill -0 "${pids[-1]}" 2>/dev/null || { echo "server for $1 on port $2 exited" >&2; exit 1; }
+    sleep 0.1
+  done
+  echo "server for $1 on port $2 never answered" >&2
+  exit 1
+}
+serve "$REL" "$REL_PORT"
 
 PATH="$WORK/stub:$PATH" RELEASE_BASE="http://localhost:$REL_PORT" \
   PAGES_URL="http://localhost:$PAGES_PORT" EXPECT_TAG="$TAG" DRY_RUN=1 \
@@ -47,8 +60,7 @@ PATH="$WORK/stub:$PATH" RELEASE_BASE="http://localhost:$REL_PORT" \
 # What the publish step would upload to the apt-history release.
 mkdir -p "$REL/apt-history"
 cp "$WORK"/repobuild/apt/history/* "$WORK/repobuild/apt/gpg-key.asc" "$REL/apt-history/"
-python3 -m http.server -d "$WORK/repobuild/pages" "$PAGES_PORT" >/dev/null 2>&1 & pids+=($!)
-sleep 1
+serve "$WORK/repobuild/pages" "$PAGES_PORT"
 
 echo
 echo "== apt: the Pages suite, then the history archive"
