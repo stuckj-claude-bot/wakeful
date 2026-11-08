@@ -2,12 +2,6 @@
   "ignorePatterns": [
     {
       "pattern": "^#"
-    },
-    {
-      "pattern": "^https://github\\.com/stuckj/wakeful"
-    },
-    {
-      "pattern": "^https://stuckj\\.github\\.io/wakeful"
     }
   ],
   "replacementPatterns": [],
