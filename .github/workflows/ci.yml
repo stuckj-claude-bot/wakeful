@@ -1,0 +1,204 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install ruff
+        run: python3 -m pip install --user ruff==0.17.2
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format
+        run: ruff format --check .
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: Validate the desktop entry
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y desktop-file-utils
+          desktop-file-validate data/wakeful.desktop
+
+  # Fedora rather than the runner's Ubuntu: it ships PyQt6 6.x with QtDBus,
+  # kreadconfig6/kwriteconfig6 and jeepney as distribution packages, which is
+  # how users get them too. The Debian side is covered by the package tests.
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: registry.fedoraproject.org/fedora:43
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          dnf install -y python3 python3-pyqt6 python3-pytest python3-jeepney \
+            dbus-daemon kf6-kconfig
+
+      - name: Unit tests (timer, controller, lid journal)
+        run: python3 -m pytest -p no:cacheprovider --junitxml=unit-results.xml
+
+      # The program itself against stand-in PowerDevil and kscreenlocker
+      # services: release on stop, expiry, kill -9 and SIGTERM, and the lid
+      # restore paths including the watchdog.
+      - name: D-Bus integration tests
+        run: |
+          dbus-run-session -- python3 -m pytest -p no:cacheprovider -m dbus \
+            --junitxml=dbus-results.xml tests/integration
+
+      - name: Fail on skipped tests
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check-no-skips.py unit-results.xml dbus-results.xml
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: "*-results.xml"
+
+  packages:
+    name: Build deb and rpm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'  # keep in sync with the pinned nfpm version below
+
+      # Pinned, as in the release workflow. v2.47.0 requires Go >= 1.26.4.
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+
+      - name: Build packages
+        run: scripts/build-packages.sh
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: dist/
+
+  # Installs each package on a stock image with nothing but its declared
+  # dependencies, runs the D-Bus tests against the installed command, and
+  # removes it again.
+  package-test:
+    name: Install on ${{ matrix.image }}
+    needs: packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - debian:trixie
+          - ubuntu:26.04
+          - registry.fedoraproject.org/fedora:43
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download packages
+        uses: actions/download-artifact@v8
+        with:
+          name: packages
+          path: dist/
+
+      - name: Install, test and remove
+        env:
+          JUNIT_OUT: ${{ github.workspace }}/package-results.xml
+        run: scripts/test-installed-package.sh
+
+      - name: Fail on skipped tests
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check-no-skips.py package-results.xml
+
+  # The release's repository publishing, without GitHub: a throwaway key signs
+  # the rpm and the metadata, rebuild-package-repos.sh runs against a stub gh
+  # and locally served releases, and Debian and Fedora containers install from
+  # the result with signature checking on.
+  package-repos:
+    name: Package repositories
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.26.5'
+
+      - name: Install tools
+        run: |
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev createrepo-c gnupg
+
+      - name: Create a throwaway signing key
+        run: |
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 -p "$GNUPGHOME"
+          gpg --batch --passphrase ci --quick-gen-key 'wakeful CI <ci@example.invalid>' ed25519 sign 1d
+          gpg --batch --pinentry-mode loopback --passphrase ci --armor --export-secret-keys > "$RUNNER_TEMP/key.asc"
+          {
+            echo "GNUPGHOME=$GNUPGHOME"
+            echo "GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | awk '/^sec/{split($2,a,"/"); print a[2]; exit}')"
+            echo "RPM_SIGNING_KEY_FILE=$RUNNER_TEMP/key.asc"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed packages
+        env:
+          NFPM_PASSPHRASE: ci
+        run: |
+          scripts/build-packages.sh
+          python3 scripts/check-rpm-signature.py dist/*.rpm
+
+      - name: Generate the repositories and install from them
+        env:
+          GPG_PASSPHRASE: ci
+        run: scripts/test-package-repos.sh "$RUNNER_TEMP/repotest"
+
+  nix:
+    name: Nix flake
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      # Builds the package (running the unit tests in the build) and evaluates
+      # the NixOS module.
+      - name: nix flake check
+        run: nix flake check -L
+
+      - name: Run the built program
+        run: |
+          nix build -L
+          ./result/bin/wakeful --version

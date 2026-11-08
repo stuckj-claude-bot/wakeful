@@ -1,0 +1,112 @@
+# nfpm configuration for the deb and rpm packages.
+# See: https://nfpm.goreleaser.com/configuration/
+#
+# Built by scripts/build-packages.sh, which sets VERSION. The package is
+# architecture-independent: nfpm writes "all" for deb and "noarch" for rpm.
+
+name: wakeful
+arch: all
+platform: linux
+version: "${VERSION}"
+maintainer: stuckj <stuckj@users.noreply.github.com>
+description: |
+  Keep a KDE Plasma session awake for a set time.
+  A tray icon that blocks sleep for 30 minutes, a few hours or until turned
+  off, either letting the screen turn off or keeping it on too, and releases
+  the block when the time runs out or the app exits. Can also ignore closing
+  the lid while a block runs.
+vendor: stuckj
+homepage: https://github.com/stuckj/wakeful
+license: MIT
+priority: optional
+section: utils
+
+overrides:
+  deb:
+    depends:
+      - python3 (>= 3.11)
+      - python3-pyqt6
+      - qt6-svg-plugins
+    recommends:
+      # kreadconfig6/kwriteconfig6, for the "ignore closing the lid" option
+      - libkf6config-bin
+  rpm:
+    depends:
+      - python3 >= 3.11
+      - python3-pyqt6
+      - qt6-qtsvg
+    recommends:
+      - kf6-kconfig
+
+contents:
+  # Directories are listed so that they are owned (rpm removes only what it
+  # owns) and get 0755; a tree entry would give them the files' mode.
+  - dst: /usr/lib/wakeful
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /usr/lib/wakeful/wakeful
+    type: dir
+    file_info:
+      mode: 0755
+  - dst: /usr/lib/wakeful/wakeful/icons
+    type: dir
+    file_info:
+      mode: 0755
+
+  - src: build/wakeful/*.py
+    dst: /usr/lib/wakeful/wakeful/
+    file_info:
+      mode: 0644
+
+  - src: build/wakeful/icons/*.svg
+    dst: /usr/lib/wakeful/wakeful/icons/
+    file_info:
+      mode: 0644
+
+  - src: packaging/wakeful
+    dst: /usr/bin/wakeful
+    file_info:
+      mode: 0755
+
+  - src: data/wakeful.desktop
+    dst: /usr/share/applications/wakeful.desktop
+    file_info:
+      mode: 0644
+
+  - src: src/wakeful/icons/wakeful.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/wakeful.svg
+    file_info:
+      mode: 0644
+
+  - src: docs/wakeful.1
+    dst: /usr/share/man/man1/wakeful.1
+    file_info:
+      mode: 0644
+
+  - src: README.md
+    dst: /usr/share/doc/wakeful/README.md
+    file_info:
+      mode: 0644
+
+  - src: DESIGN.md
+    dst: /usr/share/doc/wakeful/DESIGN.md
+    file_info:
+      mode: 0644
+
+  - src: LICENSE
+    dst: /usr/share/doc/wakeful/LICENSE
+    file_info:
+      mode: 0644
+
+rpm:
+  group: Applications/System
+  summary: Keep a KDE Plasma session awake for a set time
+
+  # dnf's gpgcheck=1 verifies a signature inside each package; a signed
+  # repomd.xml does not substitute for it, unlike apt's signed Release.
+  # RPM_SIGNING_KEY_FILE is set only by the release workflow, with
+  # NFPM_PASSPHRASE. Unset, nfpm builds an unsigned package with exit 0, so the
+  # release runs scripts/check-rpm-signature.py to stop one shipping.
+  signature:
+    key_file: "${RPM_SIGNING_KEY_FILE}"

@@ -1,0 +1,79 @@
+name: Rebuild Package Repositories
+
+# Regenerates the APT and YUM repositories and the Pages site from the release
+# assets. The release workflow runs the same script; this is for repairing
+# drift and for previewing the result. Idempotent.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build everything, publish nothing, upload the result as an artifact'
+        type: boolean
+        default: true
+      confirm:
+        description: 'For a real run, type REBUILD (ignored when dry_run is set)'
+        required: false
+        default: ''
+      allow_shrink:
+        description: 'Allow the indexes to lose entries — only when a release was deliberately deleted'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: package-repositories
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check confirmation
+        if: ${{ !inputs.dry_run }}
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          [[ "$CONFIRM" == "REBUILD" ]] || {
+            echo "::error::A real run rewrites the live repositories. Type REBUILD to confirm."; exit 1; }
+
+      - uses: actions/checkout@v7
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev createrepo-c gnupg
+
+      - name: Import GPG key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+          echo "GPG_KEY_ID=$(gpg --list-secret-keys --keyid-format LONG | awk '/^sec/{split($2,a,"/"); print a[2]; exit}')" >> "$GITHUB_ENV"
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          echo "use-agent" >> ~/.gnupg/gpg.conf
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          gpgconf --kill gpg-agent
+
+      - name: Rebuild
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          ALLOW_SHRINK: ${{ inputs.allow_shrink && '1' || '0' }}
+        run: bash scripts/rebuild-package-repos.sh "${RUNNER_TEMP}/repobuild"
+
+      - name: Upload generated metadata
+        if: ${{ always() && inputs.dry_run }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: repo-metadata
+          path: |
+            ${{ runner.temp }}/repobuild/apt/**
+            ${{ runner.temp }}/repobuild/pages/**
+            ${{ runner.temp }}/repobuild/assetmap.txt
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+/build/
+/.pytest_cache/
+/.ruff_cache/
+
+# Package builds
+/dist/
+*.deb
+*.rpm
+*.tar.gz
+
+# Nix
+/result
+/result-*
+
+# Test artifacts
+*-results.xml
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*~
+
+.claude/settings.local.json
