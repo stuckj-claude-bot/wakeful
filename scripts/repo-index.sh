@@ -40,8 +40,8 @@ EOF
 if [ "$PRERELEASE" = 1 ]; then
   cat <<EOF
   <div class="warn">
-    <p><strong>Early development; not yet usable.</strong> No release has been published yet,
-    so the package repositories below do not exist yet. Follow
+    <p><strong>Not yet released.</strong> No release has been published yet, so the APT and
+    DNF repositories below do not exist yet; the Nix flake works now. Follow
     <a href="https://github.com/${REPO}">the repository</a> for the first release.</p>
   </div>
 EOF
