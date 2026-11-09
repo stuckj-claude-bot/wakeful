@@ -15,13 +15,47 @@ tags, creates the GitHub release, and rebuilds the APT and YUM repositories on G
 | `RELEASE_PAT` | release (`sync-nix`) | optional; a token that may push to `main` if branch protection blocks `GITHUB_TOKEN` |
 | `PROJECT_PAT` | project-add | adds new issues and pull requests to the Open Source Maintenance project; without it the workflow skips with a warning |
 
-The same signing key as mkvdup's is fine. Export it with:
+Set them with `gh secret set <NAME> -R stuckj/wakeful`, which reads the value from stdin or
+prompts for it.
+
+### 2. The signing key
+
+Wakeful has a signing key of its own, not shared with other projects. To create one (for
+example to replace it), generate it in your normal keyring, whose gpg-agent has a pinentry for
+the passphrase prompt; a throwaway `GNUPGHOME` fails with `No pinentry`.
 
 ```bash
-gpg --armor --export-secret-keys YOUR_KEY_ID
+gpg --full-generate-key
+# Kind: the default, ECC (sign and encrypt) on Curve 25519
+# Expiration: 0, or a date you will remember to extend
+# Real name: John Stucklen
+# Email: the address on the other project keys
+# Comment: wakeful apt/yum repo GPG Key
+# Passphrase: becomes GPG_PASSPHRASE
+
+gpg --list-secret-keys --keyid-format LONG     # "sec ed25519/<KEYID>"
 ```
 
-### 2. GitHub Pages
+The key is ed25519. rpm verifies EdDSA signatures from 4.16 on, which covers every Fedora with
+Plasma 6; apt has no such limit.
+
+Then export it, store the files, the key ID and the passphrase in the password manager, and add
+the secrets:
+
+```bash
+KEYID=<KEYID>
+gpg --export "$KEYID" > wakeful-signing-public.pgp                # binary public key
+gpg --armor --export-secret-keys "$KEYID" > wakeful-signing-private.asc
+gh secret set GPG_PRIVATE_KEY -R stuckj/wakeful < wakeful-signing-private.asc
+gh secret set GPG_PASSPHRASE -R stuckj/wakeful
+shred -u wakeful-signing-public.pgp wakeful-signing-private.asc
+```
+
+`GPG_PRIVATE_KEY` must be the armored export. The workflows take the public key from it and
+publish it on Pages (`gpg-key.asc`, `apt/gpg-key.asc`, `yum/gpg-key.asc`), which is where the
+install instructions fetch it.
+
+### 3. GitHub Pages
 
 Settings → Pages → Source: **Deploy from a branch**, branch `gh-pages`, folder `/`. The release
 workflow creates and maintains the branch; its landing page is the project homepage,
