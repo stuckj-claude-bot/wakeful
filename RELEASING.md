@@ -12,7 +12,7 @@ tags, creates the GitHub release, and rebuilds the APT and YUM repositories on G
 | --- | --- | --- |
 | `GPG_PRIVATE_KEY` | release, rebuild-package-repos | ASCII-armored private key that signs the rpm itself and the APT and YUM metadata |
 | `GPG_PASSPHRASE` | release, rebuild-package-repos | its passphrase |
-| `RELEASE_PAT` | release (`sync-nix`) | optional; a token that may push to `main` if branch protection blocks `GITHUB_TOKEN` |
+| `RELEASE_PAT` | release (`sync-nix`) | pushes the version bump to `main`, which the `Protect main` ruleset refuses from `GITHUB_TOKEN`; see below |
 | `PROJECT_PAT` | project-add | adds new issues and pull requests to the Open Source Maintenance project; without it the workflow skips with a warning |
 
 Set them with `gh secret set <NAME> -R stuckj/wakeful`, which reads the value from stdin or
@@ -55,7 +55,22 @@ shred -u wakeful-signing-public.pgp wakeful-signing-private.asc
 publish it on Pages (`gpg-key.asc`, `apt/gpg-key.asc`, `yum/gpg-key.asc`), which is where the
 install instructions fetch it.
 
-### 3. GitHub Pages
+### 3. The release token
+
+`sync-nix` commits the new version to `main` before tagging. The `Protect main` ruleset only
+accepts changes through a pull request, so that push needs a token whose account the ruleset lets
+through:
+
+1. Create a fine-grained personal access token: resource owner `stuckj`, repository access
+   `stuckj/wakeful` only, permission **Contents: Read and write**, nothing else.
+2. `gh secret set RELEASE_PAT -R stuckj/wakeful`, and paste it.
+3. In Settings → Rules → Rulesets → Protect main, add **Repository admin** to the bypass list
+   with **Always allow**.
+
+Without it, a release whose version is already in the files still works. One that needs the bump
+stops at `sync-nix`, before anything is tagged or published, with an error naming this token.
+
+### 4. GitHub Pages
 
 Settings → Pages → Source: **Deploy from a branch**, branch `gh-pages`, folder `/`. The release
 workflow creates and maintains the branch; its landing page is the project homepage,

@@ -215,8 +215,16 @@ jobs:
             git commit -m "Set version to ${VERSION} for ${TAG} [skip ci]"
             # No rebase-and-retry: that would move the bump onto commits that
             # were never built, and the tag points at what this produces.
-            if ! git push origin "HEAD:${BRANCH}"; then
-              echo "::error::${BRANCH} moved during the release; re-run once it has settled"
+            if ! out=$(git push origin "HEAD:${BRANCH}" 2>&1); then
+              echo "$out"
+              # GH013 is a ruleset refusal, GH006 classic branch protection.
+              if grep -q -e 'GH013' -e 'GH006' <<<"$out"; then
+                echo "::error::A rule on ${BRANCH} refused the version bump. Set RELEASE_PAT to a token whose account may bypass it (see RELEASING.md), then re-run."
+              elif grep -q -e 'non-fast-forward' -e 'fetch first' <<<"$out"; then
+                echo "::error::${BRANCH} moved during the release; re-run once it has settled"
+              else
+                echo "::error::Could not push the version bump to ${BRANCH}; see the git output above."
+              fi
               exit 1
             fi
           fi
