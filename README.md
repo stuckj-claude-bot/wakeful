@@ -6,8 +6,6 @@ A tray app for KDE Plasma 6 that keeps the computer awake for a set time — sle
 
 Plasma's own "Manually block sleep and screen locking" switch has no time limit and always keeps the screen on and unlocked too. Tools such as caffeine-ng don't combine a time limit with blocking sleep alone. Wakeful does both: a block lasts 30 minutes, a few hours, or until you turn it off, and by default only sleep is blocked, so the screen still dims, turns off and locks on its usual timers.
 
-> **Status: works, not yet released.** It runs on Plasma 6.6 (tried on NixOS 25.11, Wayland), but no release has been published, so the APT and DNF repositories below do not exist yet. Until the first release, install it with [Nix](#nix) or [from source](#from-source).
-
 ## Features
 
 - **Timed blocks** — 30 minutes, 1, 2 or 4 hours, any custom length, or until turned off. Add time to a running block, or turn it off early.
