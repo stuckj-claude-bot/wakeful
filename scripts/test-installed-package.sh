@@ -18,7 +18,16 @@ if command -v apt-get >/dev/null; then
   export DEBIAN_FRONTEND=noninteractive
   # Rootless containers cannot drop privileges for apt's download sandbox.
   echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99wakeful-test
-  apt-get update -qq
+  echo 'Acquire::Retries "5";' >> /etc/apt/apt.conf.d/99wakeful-test
+  # GitHub's runners are Azure VMs, and Canonical's Azure mirror is what the
+  # runners' own Ubuntu images use; archive.ubuntu.com can time out from them.
+  if [ "${GITHUB_ACTIONS:-}" = true ] && [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+    sed -i 's#http://archive.ubuntu.com/#http://azure.archive.ubuntu.com/#' \
+      /etc/apt/sources.list.d/ubuntu.sources
+  fi
+  # --error-on=any: without it a failed fetch is only a warning, and the
+  # install below fails as an unsatisfiable dependency instead.
+  apt-get update -qq --error-on=any
   apt-get install -y -qq ./dist/wakeful_*_all.deb
   apt-get install -y -qq python3-pytest python3-jeepney dbus-daemon
   remove() { apt-get remove -y -qq wakeful; }
