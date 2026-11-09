@@ -1,0 +1,21 @@
+Package: wakeful
+Version: 0.1.0
+Architecture: all
+Maintainer: stuckj <stuckj@users.noreply.github.com>
+Installed-Size: 70
+Depends: python3 (>= 3.11), python3-pyqt6, qt6-svg-plugins
+Recommends: libkf6config-bin
+Filename: pool/main/wakeful_0.1.0_all.deb
+Size: 25252
+MD5sum: 3c3589a8da45ece4812cbea14e5e9b44
+SHA1: 9cce87a5e6760ac1960b91718deada32d11b8407
+SHA256: cd073f2f42f4a461a3bc33df1ce3cac6656940a7021ec527018cb9398aba1837
+Section: utils
+Priority: optional
+Homepage: https://github.com/stuckj/wakeful
+Description: Keep a KDE Plasma session awake for a set time.
+ A tray icon that blocks sleep for 30 minutes, a few hours or until turned
+ off, either letting the screen turn off or keeping it on too, and releases
+ the block when the time runs out or the app exits. Can also ignore closing
+ the lid while a block runs.
+
