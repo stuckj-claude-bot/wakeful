@@ -43,6 +43,7 @@ class LidGuard(Protocol):
 
 
 class ClaudeWatcher(Protocol):
+    def available(self) -> bool: ...
     def working(self) -> Sequence[ClaudeSession]: ...
 
 
@@ -53,7 +54,8 @@ class Status:
     remaining: float | None
     """Seconds left; None when inactive or when the block has no end."""
     text: str
-    """'Keeping awake: 47 min left', or 'Not keeping awake'."""
+    """'Keeping awake: 47 min left', 'Keeping awake while Claude is working', or
+    'Not keeping awake'."""
     lid_ignored: bool
     """The lid action is set to "Do nothing" right now."""
     ignore_lid: bool
@@ -122,7 +124,7 @@ class Controller:
 
     @property
     def claude_available(self) -> bool:
-        return self._claude_watcher is not None
+        return self._claude_watcher is not None and self._claude_watcher.available()
 
     @property
     def ignore_lid(self) -> bool:
@@ -146,7 +148,7 @@ class Controller:
         """
         sessions = self._read_claude()
         if while_claude:
-            if self._claude_watcher is None:
+            if not self.claude_available:
                 raise RuntimeError("Claude Code was not found")
             if not sessions:
                 raise RuntimeError("no Claude Code session is working")

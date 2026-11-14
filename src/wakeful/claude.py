@@ -83,6 +83,10 @@ class SessionWatcher:
         self._start_time = start_time
         self._domain = domain if domain is not None else pid_domain()
 
+    def available(self) -> bool:
+        """Claude Code's configuration directory exists."""
+        return self.sessions_dir.parent.is_dir()
+
     def working(self) -> tuple[ClaudeSession, ...]:
         try:
             files = sorted(self.sessions_dir.glob("*.json"))

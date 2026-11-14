@@ -73,6 +73,13 @@ def test_unreadable_files_and_missing_directory_are_skipped(tmp_path):
     assert names(watcher(tmp_path / "missing")) == []
 
 
+def test_available_follows_the_config_directory(tmp_path):
+    w = SessionWatcher(tmp_path / "claude" / "sessions", domain=DOMAIN)
+    assert not w.available()
+    (tmp_path / "claude").mkdir()
+    assert w.available()
+
+
 def test_proc_start_reads_this_process():
     assert isinstance(proc_start(os.getpid()), int)
     assert proc_start(2**22 + 1) is None

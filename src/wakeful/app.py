@@ -94,7 +94,7 @@ def run_command(args: argparse.Namespace) -> int:
     sessions = status.get("claude_sessions", [])
     if status["active"]:
         mode = Mode(status["mode"])
-        if status["while_claude"]:
+        if status.get("while_claude"):
             how_long = "while Claude is working"
         else:
             how_long = describe_remaining(status["remaining"])
@@ -119,7 +119,7 @@ def run_app(no_tray: bool) -> int:
     from PyQt6.QtCore import QCoreApplication, QTimer
     from PyQt6.QtDBus import QDBusConnection
 
-    from .claude import SessionWatcher, config_dir
+    from .claude import SessionWatcher
     from .controller import Controller
     from .inhibit import DBusInhibitor
     from .lid import KConfigTools, LidError, LidGuard
@@ -147,11 +147,7 @@ def run_app(no_tray: bool) -> int:
         log.info("kreadconfig6/kwriteconfig6 not found; the lid option is unavailable")
     lid = WatchedLidGuard(guard) if guard is not None else None
 
-    claude = SessionWatcher() if config_dir().is_dir() else None
-    if claude is None:
-        log.info("%s not found; keeping awake while Claude works is unavailable", config_dir())
-
-    controller = Controller(DBusInhibitor(bus), lid, claude=claude)
+    controller = Controller(DBusInhibitor(bus), lid, claude=SessionWatcher())
     holder = control.serve(bus, controller)
     if holder is None:
         print("wakeful is already running.", file=sys.stderr)

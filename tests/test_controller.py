@@ -242,6 +242,10 @@ def test_on_changed_fires(env):
 class FakeClaude:
     def __init__(self):
         self.sessions = []
+        self.installed = True
+
+    def available(self):
+        return self.installed
 
     def working(self):
         return self.sessions
@@ -284,6 +288,19 @@ def test_while_claude_needs_claude_code():
     c = Controller(FakeInhibitor(), None, now=Clock())
     with pytest.raises(RuntimeError, match="Claude Code was not found"):
         c.start(None, Mode.SLEEP, while_claude=True)
+
+
+def test_claude_code_installed_after_startup_is_seen(claude_env):
+    c, inhibitor, _, _, claude, _ = claude_env
+    claude.installed = False
+    assert not c.claude_available
+    with pytest.raises(RuntimeError, match="Claude Code was not found"):
+        c.start(None, Mode.SLEEP, while_claude=True)
+    claude.installed = True
+    claude.sessions = [session("a")]
+    assert c.claude_available
+    c.start(None, Mode.SLEEP, while_claude=True)
+    assert inhibitor.held is not None
 
 
 def test_while_claude_ends_after_the_grace_period(claude_env):

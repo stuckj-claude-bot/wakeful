@@ -132,9 +132,11 @@ class Tray(QObject):
         self._start_menu.addAction("Until I turn it off").triggered.connect(
             lambda: self._start(None)
         )
-        claude_action = self._start_menu.addAction("While Claude is working")
-        claude_action.triggered.connect(self._start_while_claude)
-        claude_action.setVisible(self._controller.claude_available)
+        self._while_claude_action = self._start_menu.addAction("While Claude is working")
+        self._while_claude_action.triggered.connect(self._start_while_claude)
+        self._start_menu.aboutToShow.connect(
+            lambda: self._while_claude_action.setVisible(self._controller.claude_available)
+        )
 
         self._extend_menu = m.addMenu("Add time")
         for seconds in EXTENSIONS:
@@ -191,7 +193,7 @@ class Tray(QObject):
 
         if not status.active:
             self.icon.setIcon(self._icon_idle)
-            if self._settings.last_while_claude:
+            if self._click_starts_while_claude():
                 click = "Click to keep awake while Claude is working"
             else:
                 click = f"Click to keep awake for {describe_duration(self._settings.last_duration)}"
@@ -223,9 +225,10 @@ class Tray(QObject):
         menu.setTitle(f"Claude is working ({len(sessions)})")
         menu.menuAction().setVisible(bool(sessions))
         for s in sessions:
-            action = menu.addAction(f"{s.name} — {s.doing}")
-            action.setToolTip(s.cwd)
-            action.setEnabled(False)
+            menu.addAction(f"{s.name} — {s.doing}").setEnabled(False)
+
+    def _click_starts_while_claude(self) -> bool:
+        return self._settings.last_while_claude and self._controller.claude_available
 
     # -- actions -----------------------------------------------------------
 
@@ -234,7 +237,7 @@ class Tray(QObject):
             return
         if self._controller.status().active:
             self._stop()
-        elif self._settings.last_while_claude and self._controller.claude_available:
+        elif self._click_starts_while_claude():
             self._start_while_claude()
         else:
             self._start(self._settings.last_duration)
@@ -245,8 +248,12 @@ class Tray(QObject):
         self._guard(lambda: self._controller.start(seconds, self._settings.mode))
 
     def _start_while_claude(self) -> None:
-        self._settings.last_while_claude = True
-        self._guard(lambda: self._controller.start(None, self._settings.mode, while_claude=True))
+        def start() -> None:
+            self._controller.start(None, self._settings.mode, while_claude=True)
+            # Only once it has started: a refusal must not become the click default.
+            self._settings.last_while_claude = True
+
+        self._guard(start)
 
     def _extend(self, seconds: float) -> None:
         self._guard(lambda: self._controller.extend(seconds))
