@@ -68,6 +68,14 @@ def test_idle_tooltip_matches_what_a_click_starts(tray):
     assert "Click to keep awake for 1 hour" in t.icon.toolTip()
 
 
+def test_session_names_are_shown_as_written(tray):
+    t, _, claude = tray
+    claude.sessions = [ClaudeSession(1, "R&D notes", "shell", "/w")]
+    t._start_while_claude()
+    [action] = t._claude_menu.actions()
+    assert action.iconText() == "R&D notes — running a shell"
+
+
 def test_status_from_a_tray_without_the_claude_fields(monkeypatch, capsys):
     old = {"active": True, "mode": "sleep", "remaining": 600, "lid_ignored": False}
     monkeypatch.setattr("PyQt6.QtCore.QCoreApplication", lambda *args: None)
