@@ -2,7 +2,7 @@ import pytest
 
 from wakeful.block import Mode
 from wakeful.claude import ClaudeSession
-from wakeful.controller import Controller
+from wakeful.controller import CLAUDE_GRACE, Controller
 
 
 class FakeInhibitor:
@@ -257,102 +257,99 @@ def claude_env(env):
     claude = FakeClaude()
     c = Controller(inhibitor, lid, now=clock, claude=claude)
     c.on_ended = lambda block, why: ended.append((block, why))
-    c.watch_claude = True
-    return c, inhibitor, lid, clock, claude
+    return c, inhibitor, lid, clock, claude, ended
 
 
-def test_working_claude_holds_sleep_only_until_it_stops(claude_env):
-    c, inhibitor, lid, _, claude = claude_env
-    c.tick()
-    assert inhibitor.held is None
+def test_while_claude_holds_in_the_chosen_mode_and_names_the_sessions(claude_env):
+    c, inhibitor, _, _, claude, _ = claude_env
     claude.sessions = [session("fix the tests"), session("docs", "shell")]
-    c.tick()
-    assert inhibitor.held == (Mode.SLEEP, "Claude is working: fix the tests, docs")
+    c.start(None, Mode.SCREEN, while_claude=True)
+    assert inhibitor.held == (Mode.SCREEN, "Claude is working: fix the tests, docs")
     status = c.status()
-    assert not status.active and status.held
-    assert status.text == "Keeping awake: Claude is working"
-    assert not lid.engaged
+    assert status.active and status.while_claude and status.remaining is None
+    assert status.text == "Keeping awake while Claude is working"
+    c.set_mode(Mode.SLEEP)
+    assert inhibitor.held[0] is Mode.SLEEP
+
+
+def test_while_claude_refused_when_nothing_is_working(claude_env):
+    c, inhibitor, _, _, _, _ = claude_env
+    with pytest.raises(RuntimeError, match="no Claude Code session is working"):
+        c.start(None, Mode.SLEEP, while_claude=True)
+    assert inhibitor.held is None
+    assert not c.status().active
+
+
+def test_while_claude_needs_claude_code():
+    c = Controller(FakeInhibitor(), None, now=Clock())
+    with pytest.raises(RuntimeError, match="Claude Code was not found"):
+        c.start(None, Mode.SLEEP, while_claude=True)
+
+
+def test_while_claude_ends_after_the_grace_period(claude_env):
+    c, inhibitor, _, clock, claude, ended = claude_env
+    claude.sessions = [session("a")]
+    c.start(None, Mode.SLEEP, while_claude=True)
     claude.sessions = []
+    clock.t += CLAUDE_GRACE - 1
+    c.tick()
+    assert inhibitor.held == (Mode.SLEEP, "Keeping awake while Claude is working")
+    claude.sessions = [session("a")]  # back to work within the grace period
+    c.tick()
+    claude.sessions = []
+    clock.t += CLAUDE_GRACE - 1
+    c.tick()
+    assert c.status().active
+    clock.t += 1
     c.tick()
     assert inhibitor.held is None
-    assert not c.status().held
+    [(block, why)] = ended
+    assert block.while_claude and why == "expired"
+
+
+def test_timed_block_lists_working_sessions_but_keeps_its_reason(claude_env):
+    c, inhibitor, _, clock, claude, ended = claude_env
+    claude.sessions = [session("a")]
+    c.start(60, Mode.SLEEP)
+    assert c.status().claude == (session("a"),)
+    assert inhibitor.held == (Mode.SLEEP, "Keeping awake: 1 min left")
+    clock.t += 61
+    c.tick()
+    assert inhibitor.held is None  # the timer decides, not Claude
+    assert c.status().claude == ()
+    assert ended[0][1] == "expired"
+
+
+def test_no_sessions_are_read_without_a_block(claude_env):
+    c, _, _, _, claude, _ = claude_env
+    claude.sessions = [session("a")]
+    c.tick()
+    assert c.status().claude == ()
 
 
 def test_reason_names_at_most_three_sessions(claude_env):
-    c, inhibitor, _, _, claude = claude_env
+    c, inhibitor, _, _, claude, _ = claude_env
     claude.sessions = [session(n) for n in "abcde"]
-    c.tick()
+    c.start(None, Mode.SLEEP, while_claude=True)
     assert inhibitor.held[1] == "Claude is working: a, b, c, 2 more"
 
 
-def test_block_mode_and_reason_win_while_both_hold(claude_env):
-    c, inhibitor, _, _, claude = claude_env
+def test_watcher_error_counts_as_nothing_working(claude_env):
+    c, _, _, clock, claude, ended = claude_env
     claude.sessions = [session("a")]
-    c.start(60, Mode.SCREEN)
+    c.start(None, Mode.SLEEP, while_claude=True)
+    claude.working = lambda: 1 / 0
+    clock.t += CLAUDE_GRACE
     c.tick()
-    assert inhibitor.held == (Mode.SCREEN, "Keeping awake: 1 min left")
-    assert c.status().claude == (session("a"),)
+    assert ended
 
 
-def test_block_expiring_falls_back_to_claude_not_release(claude_env):
-    c, inhibitor, _, clock, claude = claude_env
+def test_failed_while_claude_start_keeps_the_running_block(claude_env):
+    c, inhibitor, _, _, claude, _ = claude_env
+    c.start(3600, Mode.SLEEP)
     claude.sessions = [session("a")]
-    c.start(60, Mode.SCREEN)
-    inhibitor.calls.clear()
-    clock.t += 61
-    c.tick()
-    assert inhibitor.held == (Mode.SLEEP, "Claude is working: a")
-    assert ("release",) not in inhibitor.calls
-
-
-def test_stop_ends_the_block_but_claude_still_holds(claude_env):
-    c, inhibitor, _, _, claude = claude_env
-    claude.sessions = [session("a")]
-    c.start(None, Mode.SLEEP)
-    c.stop()
-    assert inhibitor.held == (Mode.SLEEP, "Claude is working: a")
-
-
-def test_failed_start_keeps_claudes_hold(claude_env):
-    c, inhibitor, _, _, claude = claude_env
-    claude.sessions = [session("a")]
-    c.tick()
     inhibitor.fail = True
     with pytest.raises(RuntimeError):
-        c.start(60, Mode.SCREEN)
-    assert inhibitor.held == (Mode.SLEEP, "Claude is working: a")
-
-
-def test_turning_the_option_off_releases(claude_env):
-    c, inhibitor, _, _, claude = claude_env
-    claude.sessions = [session("a")]
-    c.tick()
-    c.watch_claude = False
-    assert inhibitor.held is None
-    assert c.status().claude == ()
-    c.tick()
-    assert inhibitor.held is None
-
-
-def test_watcher_error_is_treated_as_no_sessions(claude_env):
-    c, inhibitor, _, _, claude = claude_env
-    claude.sessions = [session("a")]
-    c.tick()
-    claude.working = lambda: 1 / 0
-    c.tick()
-    assert inhibitor.held is None
-
-
-def test_watch_claude_without_watcher_raises():
-    c = Controller(FakeInhibitor(), None, now=Clock())
-    with pytest.raises(RuntimeError):
-        c.watch_claude = True
-    c.watch_claude = False
-
-
-def test_shutdown_releases_claudes_hold(claude_env):
-    c, inhibitor, _, _, claude = claude_env
-    claude.sessions = [session("a")]
-    c.tick()
-    c.shutdown()
-    assert inhibitor.held is None
+        c.start(None, Mode.SCREEN, while_claude=True)
+    status = c.status()
+    assert status.active and not status.while_claude and status.remaining == 3600

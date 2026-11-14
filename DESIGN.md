@@ -111,11 +111,13 @@ monitor is connected" lid rule.
 
 ## Following Claude Code
 
-The controller has two reasons to hold an inhibition: the block the user started, and, with the
-option on, Claude Code sessions that are working. It holds one inhibition for both, in the
-block's mode while there is a block and sleep-only otherwise, and releases it only when neither
-asks. The lid follows the user's block alone: Claude activity never changes a saved setting, so
-it adds nothing that can outlive Wakeful.
+"While Claude is working" is a length of block, like "until turned off": the block has no end
+time and the controller reaps it once no session has been working for a grace period, instead of
+when a time passes. Everything else about it is an ordinary block (its mode, the lid option, the
+single inhibition), so Claude activity adds no second path to holding or releasing anything.
+
+While any block runs, the controller reads which sessions are working on each tick so the tray
+and `Status` can show them. With no block it reads nothing.
 
 Claude Code is observed, not told. Wakeful reads the per-process files Claude Code already
 writes and checks each against the live process, on the controller's existing tick. Hooks were

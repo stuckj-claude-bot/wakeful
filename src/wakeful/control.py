@@ -29,7 +29,7 @@ def status_dict(status: Status) -> dict[str, Any]:
         "text": status.text,
         "lid_ignored": status.lid_ignored,
         "ignore_lid": status.ignore_lid,
-        "watch_claude": status.watch_claude,
+        "while_claude": status.while_claude,
         "claude_sessions": [
             {"name": s.name, "status": s.status, "cwd": s.cwd, "pid": s.pid} for s in status.claude
         ],
@@ -57,6 +57,11 @@ class ControlAdaptor(QDBusAbstractAdaptor):
             lambda: self._controller.start(seconds if seconds > 0 else None, Mode(mode))
         )
 
+    @pyqtSlot(str, result=str)
+    def StartWhileClaude(self, mode: str) -> str:
+        """Start a block that lasts while a Claude Code session is working."""
+        return self._answer(lambda: self._controller.start(None, Mode(mode), while_claude=True))
+
     @pyqtSlot(int, result=str)
     def Extend(self, seconds: int) -> str:
         return self._answer(lambda: self._controller.extend(seconds))
@@ -68,10 +73,6 @@ class ControlAdaptor(QDBusAbstractAdaptor):
     @pyqtSlot(bool, result=str)
     def SetIgnoreLid(self, value: bool) -> str:
         return self._answer(lambda: setattr(self._controller, "ignore_lid", value))
-
-    @pyqtSlot(bool, result=str)
-    def SetWatchClaude(self, value: bool) -> str:
-        return self._answer(lambda: setattr(self._controller, "watch_claude", value))
 
     @pyqtSlot(result=str)
     def Stop(self) -> str:

@@ -450,64 +450,65 @@ def reasons(stub) -> list[str]:
     return sorted(h["why"] for h in stub.held())
 
 
-def test_claude_option_needs_the_config_directory(stub, app):
-    app("--no-tray")
-    result = call_app(stub, "SetWatchClaude", "b", True)
-    assert not result["ok"]
-    assert "Claude Code was not found" in result["error"]
+def test_while_claude_needs_the_config_directory(stub, app):
+    a = app("--no-tray")
+    r = a.cli("start", "claude")
+    assert r.returncode == 1
+    assert "Claude Code was not found" in r.stderr
 
 
-def test_working_claude_session_keeps_awake_until_idle_or_gone(stub, app, claude_session):
-    proc, write = claude_session
+def test_while_claude_is_refused_when_nothing_is_working(stub, app, claude_session):
+    _, write = claude_session
+    write("idle")
+    a = app("--no-tray")
+    r = a.cli("start", "claude")
+    assert r.returncode == 1
+    assert "no Claude Code session is working" in r.stderr
+    assert stub.held() == []
+
+
+def test_while_claude_follows_the_mode_and_lists_the_session(stub, app, claude_session):
+    _, write = claude_session
     write("shell")
     a = app("--no-tray")
-    assert stub.held() == []  # the option is off by default
+    r = a.cli("start", "--screen", "claude")
+    assert r.returncode == 0, r.stderr
+    assert "while Claude is working" in r.stdout
+    assert "fix the tests (running a shell)" in r.stdout
+    assert sorted(h["kind"] for h in stub.held()) == ["pm", "ss"]
+    assert set(reasons(stub)) == {"Claude is working: fix the tests"}
 
-    status = call_app(stub, "SetWatchClaude", "b", True)["status"]
-    assert [s["name"] for s in status["claude_sessions"]] == ["fix the tests"]
-    [held] = stub.held()
-    assert (held["kind"], held["why"]) == ("pm", "Claude is working: fix the tests")
-    out = a.cli("status").stdout
-    assert "Keeping awake while Claude is working." in out
-    assert "fix the tests (running a shell)" in out
 
-    write("idle")
-    wait_for(lambda: stub.held() == [], what="the idle session to be let go")
-    assert "Not keeping awake" in a.cli("status").stdout
-
+def test_while_claude_drops_a_session_whose_process_is_gone(stub, app, claude_session):
+    proc, write = claude_session
     write("busy")
-    wait_for(lambda: stub.held(), what="the busy session to be followed")
+    a = app("--no-tray")
+    assert a.cli("start", "claude").returncode == 0
     proc.kill()
     proc.wait()
-    wait_for(lambda: stub.held() == [], what="the dead session to be let go")
+    # Still held through the grace period, without the gone session's name: up
+    # to one tick to notice, then the old reason is retired after PowerDevil's delay.
+    wait_for(
+        lambda: reasons(stub) == ["Keeping awake while Claude is working"],
+        timeout=20,
+        what="the gone session to be dropped from the reason",
+    )
+    assert "fix the tests" not in a.cli("status").stdout
 
 
-def test_block_ending_hands_over_to_claude(stub, app, claude_session):
+def test_timed_block_lists_working_sessions(stub, app, claude_session):
     _, write = claude_session
     write("busy")
     a = app("--no-tray")
-    assert call_app(stub, "SetWatchClaude", "b", True)["ok"]
-    assert a.cli("start", "--screen", "1h").returncode == 0
-    wait_for(
-        lambda: reasons(stub) == ["Keeping awake: 1 h left"] * 2,
-        what="Claude's inhibition to be retired in favour of the block's",
-    )
-
-    assert a.cli("stop").returncode == 0
-    # Claude's inhibition is taken before the block's is retired.
-    assert "Claude is working: fix the tests" in reasons(stub)
-    wait_for(
-        lambda: reasons(stub) == ["Claude is working: fix the tests"],
-        what="the block's inhibitions to be retired",
-    )
+    r = a.cli("start", "1h")
+    assert "fix the tests (working)" in r.stdout
+    assert reasons(stub) == ["Keeping awake: 1 h left"]
 
 
-def test_tray_follows_claude_from_its_saved_setting(stub, app, env, claude_session):
+def test_tray_runs_a_while_claude_block(stub, app, claude_session):
     _, write = claude_session
     write("busy")
-    conf = Path(env["XDG_CONFIG_HOME"]) / "wakeful" / "wakeful.conf"
-    conf.parent.mkdir(parents=True)
-    conf.write_text("[General]\nwatch_claude=true\n")
     a = app()
-    wait_for(lambda: stub.held(), what="the tray to follow the session")
-    assert "fix the tests (working)" in a.cli("status").stdout
+    assert a.cli("start", "claude").returncode == 0
+    assert reasons(stub) == ["Claude is working: fix the tests"]
+    assert a.cli("stop").returncode == 0

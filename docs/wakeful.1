@@ -18,7 +18,10 @@ wakeful \- keep a KDE Plasma session awake for a set time
 With no command,
 .B wakeful
 puts an icon in the system tray. From its menu a block can be started for a
-preset length, a custom length, or until it is turned off, then extended or
+preset length, a custom length, until it is turned off, or while Claude Code
+is working (see
+.B CLAUDE CODE
+below), then extended or
 turned off. Left\-clicking the icon starts a block of the last length used, or
 turns a running one off. The tooltip shows the time remaining.
 .PP
@@ -58,6 +61,7 @@ sessions are working.
 .PP
 \fIDURATION\fR is minutes as a bare number (\fB90\fR), or hours, minutes and
 seconds such as \fB1h30m\fR, \fB45m\fR or \fB20s\fR. \fBforever\fR means no end.
+\fBclaude\fR means while a Claude Code session is working.
 .SH OPTIONS
 .TP
 .B \-\-no\-tray
@@ -82,18 +86,21 @@ example after a reboot), the next start of
 restores them. A value changed in System Settings during the block is left as
 it is.
 .SH CLAUDE CODE
-With the tray's \fBKeep awake while Claude is working\fR option on, idle sleep
-is blocked while any Claude Code session of the same user on this computer is
-running a turn or still has a shell running. Sessions at their prompt, or
-waiting for an answer, do not count. The working sessions are listed in the
-tray menu and by \fBwakeful status\fR. They are read from the files Claude Code
-keeps in \fI$CLAUDE_CONFIG_DIR/sessions\fR (default \fI~/.claude/sessions\fR),
-every five seconds; a file whose process has gone is ignored. The option is
-offered only when that configuration directory exists.
+A block started with \fBWhile Claude is working\fR (or \fBwakeful start
+claude\fR) lasts while any Claude Code session of the same user on this
+computer is running a turn or still has a shell running, and ends once none has
+been for a minute. Sessions at their prompt, or waiting for an answer, do not
+count. It is refused if no session is working when it starts, and is offered
+only when the Claude Code configuration directory exists.
+.PP
+While any block runs, the working sessions are listed in the tray menu and by
+\fBwakeful status\fR. They are read from the files Claude Code keeps in
+\fI$CLAUDE_CONFIG_DIR/sessions\fR (default \fI~/.claude/sessions\fR), every
+five seconds; a file whose process has gone is ignored.
 .SH FILES
 .TP
 .I ~/.config/wakeful/wakeful.conf
-Preferences: mode, last length, lid option, Claude Code option, notifications.
+Preferences: mode, last length, lid option, notifications.
 .TP
 .I ~/.config/autostart/wakeful.desktop
 Present when "Start at login" is on.
