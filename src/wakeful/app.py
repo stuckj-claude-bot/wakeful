@@ -10,6 +10,7 @@ import sys
 
 from . import __version__, control
 from .block import Mode, describe_remaining, parse_duration
+from .claude import WORKING
 
 log = logging.getLogger("wakeful")
 
@@ -32,7 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
     start = sub.add_parser("start", help="keep awake for DURATION (default: until stopped)")
-    start.add_argument("duration", nargs="?", default="forever", help="e.g. 90, 45m, 1h30m")
+    start.add_argument(
+        "duration",
+        nargs="?",
+        default="forever",
+        help="e.g. 90, 45m, 1h30m, or 'claude' to last while a Claude Code session is working",
+    )
     start.add_argument(
         "--screen", action="store_true", help="keep the screen on too (default: it may turn off)"
     )
@@ -60,9 +66,12 @@ def run_command(args: argparse.Namespace) -> int:
     _app = QCoreApplication(sys.argv[:1])
     try:
         if args.command == "start":
-            seconds = parse_duration(args.duration)
             mode = Mode.SCREEN if args.screen else Mode.SLEEP
-            result = control.call("Start", int(seconds or 0), mode.value)
+            if args.duration.strip().lower() == "claude":
+                result = control.call("StartWhileClaude", mode.value)
+            else:
+                seconds = parse_duration(args.duration)
+                result = control.call("Start", int(seconds or 0), mode.value)
         elif args.command == "extend":
             seconds = parse_duration(args.duration)
             if seconds is None:
@@ -82,13 +91,23 @@ def run_command(args: argparse.Namespace) -> int:
         print(f"wakeful: {result.get('error')}", file=sys.stderr)
         return 1
     status = result["status"]
+    sessions = status.get("claude_sessions", [])
     if status["active"]:
         mode = Mode(status["mode"])
-        print(f"Keeping awake ({mode.label.lower()}): {describe_remaining(status['remaining'])}")
+        if status.get("while_claude"):
+            how_long = "while Claude is working"
+        else:
+            how_long = describe_remaining(status["remaining"])
+        print(f"Keeping awake ({mode.label.lower()}): {how_long}")
         if status["lid_ignored"]:
             print("Closing the lid will not sleep.")
     else:
         print("Not keeping awake.")
+    if sessions:
+        print("Claude sessions working:")
+        for s in sessions:
+            doing = WORKING.get(s["status"], s["status"])
+            print(f"  {s['name']} ({doing}) in {s['cwd']}")
     return 0
 
 
@@ -100,6 +119,7 @@ def run_app(no_tray: bool) -> int:
     from PyQt6.QtCore import QCoreApplication, QTimer
     from PyQt6.QtDBus import QDBusConnection
 
+    from .claude import SessionWatcher
     from .controller import Controller
     from .inhibit import DBusInhibitor
     from .lid import KConfigTools, LidError, LidGuard
@@ -127,7 +147,7 @@ def run_app(no_tray: bool) -> int:
         log.info("kreadconfig6/kwriteconfig6 not found; the lid option is unavailable")
     lid = WatchedLidGuard(guard) if guard is not None else None
 
-    controller = Controller(DBusInhibitor(bus), lid)
+    controller = Controller(DBusInhibitor(bus), lid, claude=SessionWatcher())
     holder = control.serve(bus, controller)
     if holder is None:
         print("wakeful is already running.", file=sys.stderr)

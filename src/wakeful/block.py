@@ -31,7 +31,9 @@ class Mode(enum.Enum):
 class Block:
     mode: Mode
     ends_at: float | None
-    """None means the block lasts until it is turned off."""
+    """None means the block lasts until it is turned off, or while Claude works."""
+    while_claude: bool = False
+    """The block lasts while a Claude Code session is working; ends_at is None."""
 
     def remaining(self, now: float) -> float | None:
         """Seconds left, never negative; None for a block with no end."""
@@ -53,12 +55,17 @@ class Session:
     def active(self) -> bool:
         return self.block is not None
 
-    def start(self, duration: float | None, mode: Mode, now: float) -> Block:
-        """Start a block, replacing any running one. None runs until turned off."""
+    def start(
+        self, duration: float | None, mode: Mode, now: float, while_claude: bool = False
+    ) -> Block:
+        """Start a block, replacing any running one. None runs until turned off,
+        or, with while_claude, while a Claude Code session is working."""
         if duration is not None and duration <= 0:
             raise ValueError("duration must be positive")
+        if while_claude and duration is not None:
+            raise ValueError("a block that lasts while Claude works has no duration")
         ends_at = None if duration is None else now + duration
-        self.block = Block(mode, ends_at)
+        self.block = Block(mode, ends_at, while_claude)
         return self.block
 
     def extend(self, duration: float, now: float) -> Block:
@@ -78,7 +85,7 @@ class Session:
 
     def set_mode(self, mode: Mode) -> None:
         if self.block is not None:
-            self.block = Block(mode, self.block.ends_at)
+            self.block = Block(mode, self.block.ends_at, self.block.while_claude)
 
     def cancel(self) -> Block | None:
         ended, self.block = self.block, None

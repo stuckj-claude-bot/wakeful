@@ -41,10 +41,12 @@ block.py     the block and its timing rules; no Qt, no D-Bus
 inhibit.py   holds the inhibitions over D-Bus
 lid.py       lid setting: journal, change, restore; no Qt
 lidwatch.py  watchdog process that restores the lid if the main process dies
+claude.py    which Claude Code sessions are working; no Qt
 ```
 
-Dependencies point downwards. `block.py`, `controller.py` and `lid.py` know nothing of Qt or
-D-Bus; the controller sees the inhibitor and the lid guard only through small protocols. That is
+Dependencies point downwards. `block.py`, `controller.py`, `lid.py` and `claude.py` know nothing
+of Qt or D-Bus; the controller sees the inhibitor, the lid guard and the Claude Code watcher only
+through small protocols. That is
 what lets the timer and lid rules be tested without a bus.
 
 The tray and the D-Bus control interface are two front ends to one controller. Neither keeps
@@ -107,9 +109,28 @@ What it does not do: it does not cover a reboot during a block unless Wakeful st
 afterwards (hence *Start at login*), and it does not change the separate "when an external
 monitor is connected" lid rule.
 
+## Following Claude Code
+
+"While Claude is working" is a length of block, like "until turned off": the block has no end
+time and the controller reaps it once no session has been working for a grace period, instead of
+when a time passes. Everything else about it is an ordinary block (its mode, the lid option, the
+single inhibition), so Claude activity adds no second path to holding or releasing anything.
+
+While any block runs, the controller reads which sessions are working on each tick so the tray
+and `Status` can show them. With no block it reads nothing.
+
+Claude Code is observed, not told. Wakeful reads the per-process files Claude Code already
+writes and checks each against the live process, on the controller's existing tick. Hooks were
+the alternative: documented, but they need the user to edit Claude Code's settings, they do not
+report a shell left running after a turn, and a hook that announced work and then died would
+leave Wakeful holding for a process that is gone. Reading the files costs a dependency on a
+format Claude Code does not document; `claude.py` is the only place that knows it.
+
 ## What Wakeful deliberately does not do
 
 - Hold anything that persists, other than the lid setting under the journal above.
+- Install anything into Claude Code, or keep the computer awake for a Claude Code session that
+  is waiting on the user.
 - Talk to logind, or need any privilege.
 - Support desktops other than Plasma. The freedesktop interfaces exist elsewhere, but the
   verification and the lid handling are Plasma-specific.

@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QInputDialog, QMenu, QSystemTrayIcon
 
 from . import autostart
 from .block import Block, Mode, describe_duration, describe_remaining, parse_duration
+from .claude import ClaudeSession
 from .controller import Controller, Status
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ ICONS = Path(__file__).parent / "icons"
 PRESETS: tuple[float, ...] = (30 * 60, 60 * 60, 2 * 3600, 4 * 3600)
 EXTENSIONS: tuple[float, ...] = (15 * 60, 30 * 60, 60 * 60)
 DEFAULT_DURATION = 60 * 60
+
+
+def claude_count(n: int) -> str:
+    return f"{n} session working" if n == 1 else f"{n} sessions working"
 
 
 class Settings:
@@ -69,6 +74,15 @@ class Settings:
         self._s.setValue("ignore_lid", value)
 
     @property
+    def last_while_claude(self) -> bool:
+        """The last block lasted while Claude was working; last_duration is unused."""
+        return self._bool("last_while_claude", False)
+
+    @last_while_claude.setter
+    def last_while_claude(self, value: bool) -> None:
+        self._s.setValue("last_while_claude", value)
+
+    @property
     def notify(self) -> bool:
         return self._bool("notify", True)
 
@@ -89,6 +103,7 @@ class Tray(QObject):
         self.icon = QSystemTrayIcon(self._icon_idle)
         self.icon.activated.connect(self._activated)
         self._menu = QMenu()
+        self._claude_shown: tuple[ClaudeSession, ...] = ()
         self._build_menu(lid_available)
         self.icon.setContextMenu(self._menu)
 
@@ -103,6 +118,8 @@ class Tray(QObject):
         m = self._menu
         self._status_action = m.addAction("")
         self._status_action.setEnabled(False)
+        self._claude_menu = m.addMenu("")
+        self._claude_menu.menuAction().setVisible(False)
         m.addSeparator()
 
         self._start_menu = m.addMenu("Keep awake for")
@@ -114,6 +131,11 @@ class Tray(QObject):
         self._start_menu.addSeparator()
         self._start_menu.addAction("Until I turn it off").triggered.connect(
             lambda: self._start(None)
+        )
+        self._while_claude_action = self._start_menu.addAction("While Claude is working")
+        self._while_claude_action.triggered.connect(self._start_while_claude)
+        self._start_menu.aboutToShow.connect(
+            lambda: self._while_claude_action.setVisible(self._controller.claude_available)
         )
 
         self._extend_menu = m.addMenu("Add time")
@@ -167,21 +189,48 @@ class Tray(QObject):
             self._lid_action.blockSignals(True)
             self._lid_action.setChecked(status.ignore_lid)
             self._lid_action.blockSignals(False)
+        self._show_claude(status.claude)
 
         if not status.active:
             self.icon.setIcon(self._icon_idle)
-            last = describe_duration(self._settings.last_duration)
-            self.icon.setToolTip(f"Wakeful: sleep allowed\nClick to keep awake for {last}")
+            if self._click_starts_while_claude():
+                click = "Click to keep awake while Claude is working"
+            else:
+                click = f"Click to keep awake for {describe_duration(self._settings.last_duration)}"
+            self.icon.setToolTip(f"Wakeful: sleep allowed\n{click}")
             return
         self.icon.setIcon(
             self._icon_active_screen if status.mode is Mode.SCREEN else self._icon_active
         )
         assert status.mode is not None
-        lines = [f"Wakeful: {describe_remaining(status.remaining)}", status.mode.label]
+        if status.while_claude:
+            how_long = "while Claude is working"
+        else:
+            how_long = describe_remaining(status.remaining)
+        lines = [f"Wakeful: {how_long}", status.mode.label]
         if status.lid_ignored:
             lines.append("Closing the lid will not sleep")
+        if status.claude:
+            lines.append(f"Claude: {claude_count(len(status.claude))}")
         lines.append("Click to turn off")
         self.icon.setToolTip("\n".join(lines))
+
+    def _show_claude(self, sessions: tuple[ClaudeSession, ...]) -> None:
+        """List the working sessions, rebuilding the submenu only when they change."""
+        if sessions == self._claude_shown:
+            return
+        self._claude_shown = sessions
+        menu = self._claude_menu
+        menu.clear()
+        menu.setTitle(f"Claude is working ({len(sessions)})")
+        menu.menuAction().setVisible(bool(sessions))
+        for s in sessions:
+            # A single & in action text marks a keyboard shortcut and is not shown.
+            name = s.name.replace("&", "&&")
+            menu.addAction(f"{name} — {s.doing}").setEnabled(False)
+
+    def _click_starts_while_claude(self) -> bool:
+        return self._settings.last_while_claude and self._controller.claude_available
 
     # -- actions -----------------------------------------------------------
 
@@ -190,12 +239,23 @@ class Tray(QObject):
             return
         if self._controller.status().active:
             self._stop()
+        elif self._click_starts_while_claude():
+            self._start_while_claude()
         else:
             self._start(self._settings.last_duration)
 
     def _start(self, seconds: float | None) -> None:
         self._settings.last_duration = seconds
+        self._settings.last_while_claude = False
         self._guard(lambda: self._controller.start(seconds, self._settings.mode))
+
+    def _start_while_claude(self) -> None:
+        def start() -> None:
+            self._controller.start(None, self._settings.mode, while_claude=True)
+            # Only once it has started: a refusal must not become the click default.
+            self._settings.last_while_claude = True
+
+        self._guard(start)
 
     def _extend(self, seconds: float) -> None:
         self._guard(lambda: self._controller.extend(seconds))
@@ -265,9 +325,8 @@ class Tray(QObject):
 
     def _ended(self, block: Block, why: str) -> None:
         if why == "expired" and self._settings.notify:
-            self.icon.showMessage(
-                "Wakeful",
-                "Time is up. The computer can sleep again.",
-                self._icon_idle,
-                10000,
-            )
+            if block.while_claude:
+                text = "Claude has finished. The computer can sleep again."
+            else:
+                text = "Time is up. The computer can sleep again."
+            self.icon.showMessage("Wakeful", text, self._icon_idle, 10000)

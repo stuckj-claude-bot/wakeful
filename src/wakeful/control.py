@@ -29,6 +29,10 @@ def status_dict(status: Status) -> dict[str, Any]:
         "text": status.text,
         "lid_ignored": status.lid_ignored,
         "ignore_lid": status.ignore_lid,
+        "while_claude": status.while_claude,
+        "claude_sessions": [
+            {"name": s.name, "status": s.status, "cwd": s.cwd, "pid": s.pid} for s in status.claude
+        ],
     }
 
 
@@ -52,6 +56,11 @@ class ControlAdaptor(QDBusAbstractAdaptor):
         return self._answer(
             lambda: self._controller.start(seconds if seconds > 0 else None, Mode(mode))
         )
+
+    @pyqtSlot(str, result=str)
+    def StartWhileClaude(self, mode: str) -> str:
+        """Start a block that lasts while a Claude Code session is working."""
+        return self._answer(lambda: self._controller.start(None, Mode(mode), while_claude=True))
 
     @pyqtSlot(int, result=str)
     def Extend(self, seconds: int) -> str:

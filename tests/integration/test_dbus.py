@@ -97,6 +97,7 @@ def env(tmp_path):
     e.update(
         XDG_CONFIG_HOME=str(tmp_path / "config"),
         XDG_STATE_HOME=str(tmp_path / "state"),
+        CLAUDE_CONFIG_DIR=str(tmp_path / "claude"),
         QT_QPA_PLATFORM="offscreen",
     )
     return e
@@ -420,3 +421,94 @@ def test_lid_restored_at_startup_from_a_leftover_journal(stub, env):
         assert [lid_value(env, p) for p in ("AC", "Battery", "LowBattery")] == ["1", "unset", "2"]
     finally:
         a.stop()
+
+
+# -- following Claude Code --------------------------------------------------
+
+
+@pytest.fixture
+def claude_session(env):
+    """A live process standing in for Claude Code, and a writer for its session file."""
+    proc = subprocess.Popen(["sleep", "300"])
+    sessions = Path(env["CLAUDE_CONFIG_DIR"]) / "sessions"
+    sessions.mkdir(parents=True)
+    stat = Path(f"/proc/{proc.pid}/stat").read_text()
+    started = stat[stat.rfind(")") + 2 :].split()[19]
+
+    def write(status: str) -> None:
+        data = {"pid": proc.pid, "procStart": started, "status": status, "name": "fix the tests"}
+        tmp = sessions / f"{proc.pid}.json.tmp"
+        tmp.write_text(json.dumps(data))
+        tmp.replace(sessions / f"{proc.pid}.json")
+
+    yield proc, write
+    proc.kill()
+    proc.wait()
+
+
+def reasons(stub) -> list[str]:
+    return sorted(h["why"] for h in stub.held())
+
+
+def test_while_claude_needs_the_config_directory(stub, app):
+    a = app("--no-tray")
+    r = a.cli("start", "claude")
+    assert r.returncode == 1
+    assert "Claude Code was not found" in r.stderr
+
+
+def test_while_claude_is_refused_when_nothing_is_working(stub, app, claude_session):
+    _, write = claude_session
+    write("idle")
+    a = app("--no-tray")
+    r = a.cli("start", "claude")
+    assert r.returncode == 1
+    assert "no Claude Code session is working" in r.stderr
+    assert stub.held() == []
+
+
+def test_while_claude_follows_the_mode_and_lists_the_session(stub, app, claude_session):
+    _, write = claude_session
+    write("shell")
+    a = app("--no-tray")
+    r = a.cli("start", "--screen", "claude")
+    assert r.returncode == 0, r.stderr
+    assert "while Claude is working" in r.stdout
+    assert "fix the tests (running a shell)" in r.stdout
+    assert sorted(h["kind"] for h in stub.held()) == ["pm", "ss"]
+    assert set(reasons(stub)) == {"Claude is working: fix the tests"}
+
+
+def test_while_claude_drops_a_session_whose_process_is_gone(stub, app, claude_session):
+    proc, write = claude_session
+    write("busy")
+    a = app("--no-tray")
+    assert a.cli("start", "claude").returncode == 0
+    proc.kill()
+    proc.wait()
+    # Still held through the grace period, without the gone session's name: up
+    # to one tick to notice, then the old reason is retired after PowerDevil's delay.
+    wait_for(
+        lambda: reasons(stub) == ["Keeping awake while Claude is working"],
+        timeout=20,
+        what="the gone session to be dropped from the reason",
+    )
+    assert "fix the tests" not in a.cli("status").stdout
+
+
+def test_timed_block_lists_working_sessions(stub, app, claude_session):
+    _, write = claude_session
+    write("busy")
+    a = app("--no-tray")
+    r = a.cli("start", "1h")
+    assert "fix the tests (working)" in r.stdout
+    assert reasons(stub) == ["Keeping awake: 1 h left"]
+
+
+def test_tray_runs_a_while_claude_block(stub, app, claude_session):
+    _, write = claude_session
+    write("busy")
+    a = app()
+    assert a.cli("start", "claude").returncode == 0
+    assert reasons(stub) == ["Claude is working: fix the tests"]
+    assert a.cli("stop").returncode == 0
